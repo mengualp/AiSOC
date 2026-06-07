@@ -1,0 +1,68 @@
+## Learned User Preferences
+
+- Always track progress locally (e.g. in a TODO/PROGRESS file) so work can be resumed after IDE crashes or restarts.
+- Complete all planned tasks without stopping mid-way; work through the full list until done.
+- Do not mention competitor names (Prophet Security, Torq) anywhere in code, comments, or docs — this is an open-source project.
+- Before pushing to GitHub, ensure no secrets, API keys, tokens, or sensitive data are present in any public repo files.
+- Host codebase on GitHub once fully built out; keep documentation in sync.
+- Never edit plan files directly — implement the plan as specified without modifying the plan document itself.
+- After every significant change, push code and update documentation on GitHub immediately — don't wait to be asked.
+- Benchmark data and documentation must be transparent about what is synthetic vs. real; never present fabricated metrics as actual measured performance.
+- When the task is clear, act autonomously — don't ask unnecessary clarifying questions.
+
+## Learned Workspace Facts
+
+- Project: AiSOC — open-source, AI-powered Security Operations Center maintained by the AiSOC community under the MIT license.
+- Monorepo managed with pnpm (pnpm@8.15.1) and Turborepo; workspaces defined in `apps/*` and `packages/*`.
+- Apps: `apps/web` (Next.js frontend), `apps/docs` (documentation site).
+- Backend services in `services/`: `api` (FastAPI/Python 3.11), `agents`, `alert-fusion`, `connectors`, `demo-producer`, `enrichment`, `fusion`, `ingest`, `realtime`, `threatintel`, `ocsf`.
+- API service stack: FastAPI, Uvicorn, SQLAlchemy (async), asyncpg (PostgreSQL), Alembic (migrations), Redis, python-jose (JWT), Pydantic v2.
+- Packages: `packages/types` (shared TypeScript types), `packages/ui`, `packages/sdk-go`, `packages/sdk-py`, `packages/sdk-ts`, `packages/plugin-sdk-go`, `packages/plugin-sdk-py`.
+- Docker Compose used for local dev (`docker-compose.dev.yml`); Terraform in `infra/terraform/` for infrastructure.
+- CI uses GitHub Actions (`.github/workflows/`); includes workflows for OpenAPI checks, CI, docs deployment, marketplace sync, and detection validation.
+- Detection rules stored in `detections/` (YAML format, categorized by cloud/endpoint/identity/network/application).
+- Marketplace plugin index at `marketplace/index.json`, synced to `apps/web/public/marketplace/` via `pnpm marketplace:sync`.
+- Connector platform conventions:
+  - Connectors live under `services/connectors/app/connectors/<name>.py`. Each subclasses `BaseConnector` and declares a `schema()` classmethod returning a `ConnectorSchema(name, label, description, category, fields, oauth, default_poll_interval_seconds)`. Categories are `edr | siem | cloud | iam | saas | vcs | network`.
+  - Discovery is registry-based — add the class to `_CONNECTOR_CLASSES` in `services/connectors/app/connectors/__init__.py` (no other wiring required).
+  - Sensitive `auth_config` fields are marked `secret=True` in the schema and encrypted at the application layer using `CredentialVault` (Fernet AES-128-CBC + HMAC-SHA256). Key in `AISOC_CREDENTIAL_KEY`; rotation supported via `MultiFernet` + `AISOC_CREDENTIAL_KEY_ROTATION_FROM`. Vault token format is `vault:v1:<base64>`.
+  - The API service (`services/api`) holds the encrypt/decrypt keypair authority; `services/connectors` ships a vendored read-path `decrypt_dict()` so the scheduler can decrypt at poll time without owning the write path.
+  - Polling runs in-process inside `services/connectors` via APScheduler (`ConnectorScheduler`). One job per enabled instance, 5-min default cadence, overridable per-instance via `connector_config.poll_interval_seconds`. The scheduler reloads jobs every 30s. Disable in tests with `AISOC_CONNECTORS_DISABLE_SCHEDULER=1`.
+  - Normalized events flow through `IngestClient` (`services/connectors/app/ingest_client.py`) to `services/ingest`'s `/v1/ingest/batch` endpoint with an `X-Tenant-ID` header.
+  - Severity ladder is exactly five tiers: `info | low | medium | high | critical` (v1.5+). Vendor-native ladders that publish a distinct `critical` (Azure 5-tier, GCP SCC 5-tier, GitHub `critical`, ServiceNow priority 1, AWS GuardDuty ≥8.0, AuditD identity-destruction events, K8s `cluster-admin` bindings, Tailscale tailnet lockdown failures) MUST map to `critical` in their `normalize()` and NOT be collapsed into `high`. Confidence (`alert.confidence`, int 0–100 with band `low | medium | high`) is independent of severity and is emitted by `services/fusion` `ConfidenceScorer`.
+  - Every connector ships a marketplace manifest at `plugins/<connector-id>/plugin.yaml` mirroring its `schema()`. Run `pnpm marketplace:sync` after adding one.
+  - Per-connector setup walkthroughs live under `apps/docs/docs/connectors/<connector-id>.md` and are indexed by `apps/docs/sidebars.ts` under the `Connectors` category. The vault threat model + rotation procedure live in `apps/docs/docs/operations/credentials.md`.
+- **Alerts / Investigation Rail (v1.5):** `/alerts` is a two-pane workbench with `InvestigationRail.tsx` on the right. `GET /api/v1/alerts/{id}` returns an envelope (narrative, related entities with `pivotPath`, six-event mini-timeline, `recommended_actions`). Fusion writes deterministic correlation copy at fuse time (`services/fusion/app/services/narrative.py`); API uses `alert_rail.py`, `narrative_projection.py`, and vendored `app/_vendor/narrative.py` (keep in sync via `scripts/sync_vendored_narrative.py`). User doc: `apps/docs/docs/console/investigation-rail.md`.
+- v1.4 eval harness conventions:
+  - Synthetic dataset is fixed at 200 incidents (`services/agents/tests/eval_data/synthetic_incidents.json`) plus an aligned synthetic telemetry corpus (`synthetic_telemetry.jsonl`). Three of the four metrics (`alert_reduction`, `investigation_completeness`, `response_quality`) are substrate self-consistency gates, not agent accuracy scores; only `mitre_accuracy` measures the live agent. The benchmark page (`apps/docs/docs/benchmark.md`) explains which is which.
+  - PRs touching the agent, orchestrator graph, prompts, tools, RAG corpus, or detection content must re-grade against the harness and include before/after deltas in the PR body if any axis regresses.
+- Project website at `tryaisoc.com`; domain registered through Cloudflare.
+- Production hosting target is Fly.io for backend services.
+- v1.0 buyer-value plan (`aisoc_v1.0_—_buyer-value_plan_c8116970.plan.md`) is fully implemented (all WS-A through WS-H workstreams completed as of May 2026). Key additions:
+  - WS-A: Demo seed script at `services/api/app/scripts/seed_demo.py` — 15 realistic incidents, one-click Render deploy (`render.yaml` + README badge).
+  - WS-C: 25 named parameterised playbooks (WS-C1), playbook gallery with eval gate (WS-C2/C3).
+  - WS-D: Auto-summary at investigation close with PDF export (WS-D2), replayable investigation timeline (WS-D3), rate-limit + real-test hardening (WS-D1).
+  - WS-F: Light/dark theme persisted in user profile (WS-F1), WCAG AA axe-core CI gate (WS-F2), saved views on Alerts/Cases/Playbooks + drag-drop dashboard widgets (WS-F3), visual SOAR studio (undo/redo, edge validation, schema-driven forms — WS-F4), empty-state polish + v1.1 deferred badges (WS-F5).
+  - WS-G: Slack Bolt service at `services/slack-bot/` with `/aisoc` ChatOps commands (WS-G1); executive digest with auto-generated PDF + weekly scheduler in `services/api/app/services/digest_pdf.py` and `services/api/app/api/v1/endpoints/reports.py` (WS-G2).
+  - WS-H: LLM cost dashboard (`services/api/app/services/cost_dashboard.py` + `apps/web/src/app/(admin)/costs/page.tsx` — WS-H1); BYOK per-tenant LLM credentials vault-encrypted via `CredentialVault`, model `TenantLlmCredential`, settings UI in `apps/web/src/components/settings/SettingsView.tsx` (WS-H2); compliance audit export CSV + HTML bundles at `services/api/app/services/audit_export.py` (WS-H3); air-gapped / local-LLM mode via Ollama/LiteLLM overlay + zero-external-call demo seed (WS-H4).
+  - Threat actor attribution engine v0 at `services/threatintel/` (rebased, hardened, open as PR #43).
+- **v8.0 wave-1 (on `main`, not yet tagged as of 2026-05-14):** Architectural foundation for the v8.0 line. `VERSION` stays at `7.3.1` until wave-2 lands; all v8.0 work is documented under `[Unreleased]` in `CHANGELOG.md`. Tracking doc: `AISOC_V8_PROGRESS.md`. Key shipped pieces:
+  - **Graph at ingest (T1.1).** `services/ingest/internal/graph/` writes a Neo4j entity graph (`User`, `Asset`, `Process`, `IP`, `Domain`, `Alert`, 17 node labels / 14 edge types total) inline with Kafka consumption. Batched UNWIND upserts + fire-and-forget retry queue keep the ingest latency budget unchanged. Schema doc: `apps/docs/docs/architecture/graph-schema.md`. Anchor post: `apps/web/content/blog/graph-at-ingest.mdx`.
+  - **Four-agent rebrand (T2.1).** `DetectAgent`, `TriageAgent`, `HuntAgent`, `RespondAgent` in `services/agents/app/agents/`. Back-compat aliases preserve existing imports. Each owns one funnel stage; funnel KPI doc at `apps/docs/docs/console/funnel-kpis.md`.
+  - **`/hunt` natural-language surface (T2.2).** `apps/web/src/app/(app)/hunt/` + `services/api/app/api/v1/endpoints/saved_hunts.py`. NL prompt → ES|QL / SPL / KQL template (HuntAgent never writes raw queries). Saved hunts have `pivotPath` deep-links into the Investigation Rail.
+  - **Sixteen first-party connectors.** Wave-1 fully tested: `tines`, `torq`, `falco`, `pagerduty`, `opsgenie`, `confluence_audit`. Wave-2 with full fixtures + tests: `cloudflare_zt`, `sysdig`, `vault`, `snowflake`. Six more `[wip]` in `AISOC_V8_PROGRESS.md`. All five severity tiers preserved end-to-end.
+  - **L0–L4 automation maturity model.** `apps/docs/docs/concepts/automation-maturity.md` + `apps/web/content/papers/l0-l4-automation-maturity.md` (PDF rendered via `pnpm docs:build`). Ladder: L0 manual → L4 fully autonomous closure with human sign-off.
+  - **Public weekly benchmark scoreboard.** `apps/docs/docs/benchmark-scoreboard.mdx` reads `apps/docs/static/data/scoreboard.json`, refreshed by `.github/workflows/wet-eval.yml` (weekly). Existing eval-harness transparency rules apply (synthetic vs real labelled explicitly).
+- **Security wave shipped before v8.0 cut (PRs #116–#128, May 2026):** Twelve critical/high CVE-class fixes. Patterns to remember:
+  - Rule engine no longer uses `eval()` / `compile()` on user input — conditions are parsed into a whitelisted AST in `services/api/app/services/rules_engine.py`.
+  - Tenant isolation is enforced at the **query layer** (filter by `tenant_id` in `WHERE`), not via RLS alone, on `/hunts` and `/cases` endpoints. RLS remains as defence-in-depth.
+  - CORS: shared `cors.py` is vendored byte-identical into every Python service. It refuses to start when `AISOC_CORS_ORIGINS` contains `*` while credentials are enabled and `AISOC_ENV=production`. TypeScript guard for `services/realtime` enforces the same rule.
+  - Playbook outbound traffic: every `http_request` / `notify` step goes through `services/agents/app/playbook/ssrf_guard.py` — scheme allow-list, hostname resolution + IP allow-list, cloud-metadata block list that applies even when private IPs are explicitly allowed.
+  - Plugin manager OCI installs verify signed manifests against an allow-list and pin image digests at install time, re-verifying on every load.
+  - Dev-mode: one canonical `AISOC_DEV_MODE` env var replaces the per-service patchwork of `DEV_MODE` / `SKIP_AUTH` / `AISOC_DEMO_MODE` flags. `tests/test_security_defaults.py` is a CI gate that asserts no dev-mode shortcut is reachable when the flag is unset.
+  - LLM input contract: untrusted enrichment (threat-intel feeds, user-submitted content) runs through `services/api/app/services/llm_safety.py` (boundary markers, control-character stripping, length cap) before any prompt concatenation.
+- **Static analysis hygiene (CodeQL):** Python alert count on `main` is zero as of 2026-05-14, enforced as a CI gate. Two patterns drove the cleanup:
+  - **`py/log-injection` — sanitise inline at the call site.** The taint tracker doesn't follow `_log_safe(value)` through function boundaries reliably, but it does recognise an inline `str(value).replace("\r", "").replace("\n", " ")[:N]` chain. Canonical example: `services/api/app/api/v1/endpoints/waitlist.py`. Even `uuid.UUID`-typed values are sanitised explicitly so the property is visible to both CodeQL and future readers.
+  - **`py/import-and-import-from` — pick one import style per module.** Tests that monkey-patch module-level constants should use `pytest.MonkeyPatch.setattr(module, "_NAME", value)` (with the standard from-import form), not `import app.foo as foo_module` _and_ a from-import for the same names.
+  - Docs anchor: `apps/docs/docs/operations/security.md#static-analysis-codeql`.
+- **UEBA env-var convention (PR #135, first community contribution, closes Issue #134):** `services/ueba/app/core/config.py` uses Pydantic `BaseSettings` with `populate_by_name=True` and `Field(default=..., validation_alias=AliasChoices("UNPREFIXED", "UEBA_PREFIXED"))` per field. Both forms work; unprefixed wins when both are set. `services/ueba/alembic/env.py` follows the same rule: `os.environ.get("DATABASE_URL") or os.environ.get("UEBA_DATABASE_URL", default)`. Same pattern as `services/fusion/app/core/config.py`. Test coverage: `services/ueba/tests/test_config.py` asserts four cases (unprefixed-only / prefixed-only / both-with-unprefixed-winning / default-fallback). Doc anchor: `apps/docs/docs/deployment/env-vars.md#ueba-service-servicesueba`.
